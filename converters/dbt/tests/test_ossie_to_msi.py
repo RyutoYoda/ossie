@@ -553,6 +553,53 @@ class TestOssieToMSIDialectSelection:
 
         assert result.metrics[0].type_params.expr == "amt_snowflake_only"
 
+    def test_the_first_ossie_sql_2026_entry_wins_when_the_dialect_is_repeated(self) -> None:
+        # `dialects` has no `uniqueItems` constraint, so the same dialect may be listed twice.
+        doc = _doc_with_metric_expression(
+            _multi_dialect_expr(
+                (OssieDialect.OSSIE_SQL_2026, "SUM(orders.amount)"),
+                (OssieDialect.OSSIE_SQL_2026, "SUM(orders.amount_duplicate)"),
+            )
+        )
+
+        result = OssieToMSIConverter().convert(doc).output
+
+        assert result.metrics[0].type_params.expr == "amount"
+
+    def test_the_dataset_of_a_column_is_resolved_with_the_same_dialect_preference(self) -> None:
+        # `unrelated` is declared first, so resolving the field expression positionally
+        # would miss `orders` and fall back to it.
+        doc = _ossie_doc(
+            datasets=[
+                _ossie_dataset("unrelated", fields=[_ossie_field("other_column")]),
+                _ossie_dataset(
+                    "orders",
+                    fields=[
+                        OssieField(
+                            name="amount",
+                            expression=_multi_dialect_expr(
+                                (OssieDialect.SNOWFLAKE, "amt_snowflake_only"),
+                                (OssieDialect.OSSIE_SQL_2026, "amount_portable"),
+                            ),
+                        )
+                    ],
+                ),
+            ],
+            metrics=[
+                OssieMetric(
+                    name="revenue",
+                    expression=_multi_dialect_expr(
+                        (OssieDialect.OSSIE_SQL_2026, "SUM(amount_portable)"),
+                    ),
+                )
+            ],
+        )
+
+        result = OssieToMSIConverter().convert(doc).output
+
+        agg_params = result.metrics[0].type_params.metric_aggregation_params
+        assert agg_params.semantic_model == "orders"
+
 
 class TestOssieToMSIRoundTrip:
     def test_ossie_to_msi_to_ossie_preserves_structure(self, snapshot: SnapshotAssertion) -> None:
