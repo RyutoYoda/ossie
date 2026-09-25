@@ -20,7 +20,16 @@
 import pytest
 from syrupy.assertion import SnapshotAssertion
 
-from ossie import OssieDataType, OssieDimension
+from ossie import (
+    OssieDataType,
+    OssieDialect,
+    OssieDialectExpression,
+    OssieDimension,
+    OssieDocument,
+    OssieExpression,
+    OssieField,
+    OssieMetric,
+)
 from ossie_dbt.msi_to_ossie import MSIToOssieConverter
 from ossie_dbt.ossie_to_msi import OssieToMSIConverter
 from metricflow_semantic_interfaces.implementations.elements.measure import (
@@ -454,6 +463,95 @@ class TestOssieToMSIMetricConversion:
         assert m.type_params.metric_aggregation_params.agg_params is not None
         assert m.type_params.metric_aggregation_params.agg_params.percentile == 0.95
         assert m.type_params.expr == "amount"
+
+
+def _multi_dialect_expr(*pairs: tuple[OssieDialect, str]) -> OssieExpression:
+    """Build an expression carrying more than one dialect, in the given order."""
+    return OssieExpression(
+        dialects=[OssieDialectExpression(dialect=dialect, expression=expr) for dialect, expr in pairs]
+    )
+
+
+_SNOWFLAKE_METRIC = (OssieDialect.SNOWFLAKE, "SUM(orders.amt_snowflake_only)")
+_OSSIE_SQL_METRIC = (OssieDialect.OSSIE_SQL_2026, "SUM(orders.amount)")
+_ANSI_METRIC = (OssieDialect.ANSI_SQL, "SUM(orders.amount_ansi)")
+
+
+def _doc_with_metric_expression(expression: OssieExpression) -> OssieDocument:
+    return _ossie_doc(
+        datasets=[_ossie_dataset("orders", fields=[_ossie_field("amount")])],
+        metrics=[OssieMetric(name="revenue", expression=expression)],
+    )
+
+
+class TestOssieToMSIDialectSelection:
+    @pytest.mark.parametrize(
+        "order",
+        [
+            (_OSSIE_SQL_METRIC, _SNOWFLAKE_METRIC),
+            (_SNOWFLAKE_METRIC, _OSSIE_SQL_METRIC),
+        ],
+        ids=["ossie_sql_first", "vendor_first"],
+    )
+    def test_ossie_sql_2026_wins_over_a_vendor_dialect_in_either_order(
+        self, order: tuple[tuple[OssieDialect, str], ...]
+    ) -> None:
+        doc = _doc_with_metric_expression(_multi_dialect_expr(*order))
+
+        result = OssieToMSIConverter().convert(doc).output
+
+        assert result.metrics[0].type_params.expr == "amount"
+
+    @pytest.mark.parametrize(
+        "order",
+        [
+            (_ANSI_METRIC, _OSSIE_SQL_METRIC),
+            (_OSSIE_SQL_METRIC, _ANSI_METRIC),
+        ],
+        ids=["ansi_first", "ossie_sql_first"],
+    )
+    def test_ansi_sql_still_takes_precedence_over_ossie_sql_2026(
+        self, order: tuple[tuple[OssieDialect, str], ...]
+    ) -> None:
+        doc = _doc_with_metric_expression(_multi_dialect_expr(*order))
+
+        result = OssieToMSIConverter().convert(doc).output
+
+        assert result.metrics[0].type_params.expr == "amount_ansi"
+
+    def test_field_expression_prefers_ossie_sql_2026_over_a_vendor_dialect(self) -> None:
+        doc = _ossie_doc(
+            datasets=[
+                _ossie_dataset(
+                    "orders",
+                    fields=[
+                        OssieField(
+                            name="region",
+                            expression=_multi_dialect_expr(
+                                (OssieDialect.SNOWFLAKE, "region_snowflake_only"),
+                                (OssieDialect.OSSIE_SQL_2026, "region_portable"),
+                            ),
+                        )
+                    ],
+                )
+            ]
+        )
+
+        sm = OssieToMSIConverter().convert(doc).output.semantic_models[0]
+
+        assert [(d.name, d.expr) for d in sm.dimensions] == [("region", "region_portable")]
+
+    def test_first_entry_is_still_used_when_no_portable_dialect_is_present(self) -> None:
+        doc = _doc_with_metric_expression(
+            _multi_dialect_expr(
+                (OssieDialect.SNOWFLAKE, "SUM(orders.amt_snowflake_only)"),
+                (OssieDialect.DAX, "SUM(orders.amt_dax_only)"),
+            )
+        )
+
+        result = OssieToMSIConverter().convert(doc).output
+
+        assert result.metrics[0].type_params.expr == "amt_snowflake_only"
 
 
 class TestOssieToMSIRoundTrip:
