@@ -72,6 +72,7 @@ class Relationship(OssieObject):
     """
     name: str
     description: str | None = None
+    iri: str | None = None
     roles: list[Role] = Field(default_factory=list)
     verbalizes: list[str] = Field(default_factory=list)
     multiplicity: Literal["OneToOne", "ManyToOne"] | None = None
@@ -100,6 +101,7 @@ class ConceptComponent(OssieObject):
     concept: str
     type: Literal["EntityType", "ValueType"] | None = None
     description: str | None = None
+    iri: str | None = None
     extends: list[str] | None = None
     identify_by: list[str] = Field(default_factory=list)
     derived_by: list[str] = Field(default_factory=list)
@@ -247,6 +249,7 @@ class OssieSpec(OssieObject):
     ai_context: AiContext | None = None
     ontology: list[ConceptComponent] = Field(default_factory=list)
     ontology_mappings: list[OntologyMapping] = Field(default_factory=list)
+    prefixes: dict[str, str] = Field(default_factory=dict)
 
     @classmethod
     def load_yaml(cls, text: str) -> OssieSpec:
