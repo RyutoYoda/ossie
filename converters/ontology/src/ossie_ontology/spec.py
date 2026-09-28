@@ -245,11 +245,11 @@ class OssieSpec(OssieObject):
     version: str | None = None
     name: str
     description: str | None = None
+    prefixes: dict[str, str] = Field(default_factory=dict)
     requires: list[str] = Field(default_factory=list)
     ai_context: AiContext | None = None
     ontology: list[ConceptComponent] = Field(default_factory=list)
     ontology_mappings: list[OntologyMapping] = Field(default_factory=list)
-    prefixes: dict[str, str] = Field(default_factory=dict)
 
     @classmethod
     def load_yaml(cls, text: str) -> OssieSpec:
