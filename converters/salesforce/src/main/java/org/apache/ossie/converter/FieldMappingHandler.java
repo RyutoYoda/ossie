@@ -52,6 +52,11 @@ public class FieldMappingHandler implements PipelineStep {
         "COUNT|SUM|AVG|MIN|MAX|DATE|YEAR|MONTH|DAY)\\b"
     );
 
+    // schema.table.column, each segment either a plain or a double-quoted identifier
+    private static final Pattern IDENTIFIER_PATH_PATTERN = Pattern.compile(
+        "(?:[A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\")(?:\\.(?:[A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\"))*"
+    );
+
     private final ConversionDirection direction;
     private final CustomExtensionHandler customExtensionHandler;
 
@@ -508,6 +513,12 @@ public class FieldMappingHandler implements PipelineStep {
      */
     private boolean isCalculatedExpression(String expression) {
         if (expression == null || expression.isEmpty()) {
+            return false;
+        }
+
+        // A bare identifier path is always a direct reference, even when a segment spells a
+        // SQL keyword. Warehouses routinely expose columns named DATE, MONTH or COUNT.
+        if (IDENTIFIER_PATH_PATTERN.matcher(expression.trim()).matches()) {
             return false;
         }
 
