@@ -52,10 +52,12 @@ public class FieldMappingHandler implements PipelineStep {
         "COUNT|SUM|AVG|MIN|MAX|DATE|YEAR|MONTH|DAY)\\b"
     );
 
-    // schema.table.column, each segment either a plain or a double-quoted identifier
-    private static final Pattern IDENTIFIER_PATH_PATTERN = Pattern.compile(
-        "(?:[A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\")(?:\\.(?:[A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\"))*"
-    );
+    // A SQL identifier, bare or double-quoted: customer_name, "Customer Name"
+    private static final String SQL_IDENTIFIER = "(?:[A-Za-z_][A-Za-z0-9_$]*|\"[^\"]+\")";
+
+    // A column reference, optionally qualified: column, table.column, schema.table.column
+    private static final Pattern IDENTIFIER_PATH_PATTERN =
+        Pattern.compile(SQL_IDENTIFIER + "(?:\\." + SQL_IDENTIFIER + ")*");
 
     private final ConversionDirection direction;
     private final CustomExtensionHandler customExtensionHandler;
