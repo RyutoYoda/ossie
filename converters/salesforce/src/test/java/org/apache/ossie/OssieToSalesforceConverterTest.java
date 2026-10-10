@@ -252,6 +252,47 @@ class OssieToSalesforceConverterTest {
     }
 
     @Test
+    void testAModelWhoseRelationshipsAreAllFilteredExportsNone() throws Exception {
+        // Dropping the last valid relationship used to leave the relationship mappings
+        // unclaimed, and whatever is left unclaimed is applied generically once every
+        // handler has run -- putting the rejected relationships back into the payload in
+        // their Ossie shape, which the semantic model API answers with HTTP 500.
+        String ossieModel = "version: 0.2.0.dev0\n"
+                + "name: Imported_Model\n"
+                + "datasets:\n"
+                + "- name: Orders\n"
+                + "  source: Orders__dll\n"
+                + "  fields:\n"
+                + "  - name: order_id\n"
+                + "    dimension: {}\n"
+                + "    expression:\n"
+                + "      dialects:\n"
+                + "      - dialect: ANSI_SQL\n"
+                + "        expression: order_id\n"
+                + "- name: Products\n"
+                + "  source: Products__dll\n"
+                + "  fields:\n"
+                + "  - name: product_id\n"
+                + "    dimension: {}\n"
+                + "    expression:\n"
+                + "      dialects:\n"
+                + "      - dialect: ANSI_SQL\n"
+                + "        expression: product_id\n"
+                + "relationships:\n"
+                + "- name: Orders_Products\n"
+                + "  from: Orders\n"
+                + "  to: Products\n"
+                + "  from_columns: [missing_id]\n"
+                + "  to_columns: [product_id]\n";
+
+        List<String> results = converter.convert(ossieModel);
+        Map<String, Object> sfModel = jsonMapper.readValue(results.get(0), new TypeReference<Map<String, Object>>() {});
+
+        assertNull(sfModel.get("semanticRelationships"),
+                "a relationship dropped by validation should not reach the payload");
+    }
+
+    @Test
     void testCustomExtensionsRestoration() throws Exception {
         List<String> results = converter.convert(ossieYaml);
         Map<String, Object> sfModel = jsonMapper.readValue(results.get(0), new TypeReference<Map<String, Object>>() {});

@@ -75,6 +75,14 @@ public class RelationshipMappingHandler implements PipelineStep {
 
         // Validate and filter relationships - remove those with non-existent fields
         List<Object> validRelationships = validateAndFilterRelationships(ossieRelationships, outputData);
+
+        // Claim the relationship mappings before the filtered list can turn out to be
+        // empty. Any left behind are applied generically after every handler has run,
+        // which would copy the relationships this handler just rejected into the payload
+        // in their Ossie shape, with none of the properties Salesforce names them by.
+        Map<String, String> relationshipMappings = MappingUtils.filterMappingsByPrefix(mappings, RELATIONSHIPS);
+        relationshipMappings.keySet().forEach(mappings::remove);
+
         if (validRelationships.isEmpty()) {
             return;
         }
@@ -82,10 +90,7 @@ public class RelationshipMappingHandler implements PipelineStep {
         // Update sourceData with filtered relationships
         sourceData.put(RELATIONSHIPS, validRelationships);
 
-        Map<String, String> relationshipMappings = MappingUtils.filterMappingsByPrefix(mappings, RELATIONSHIPS);
-
         Map<String, Object> mappedData = GenericMappingEngine.applyMappings(sourceData, relationshipMappings);
-        relationshipMappings.keySet().forEach(mappings::remove);
 
         outputData.putAll(mappedData);
 
