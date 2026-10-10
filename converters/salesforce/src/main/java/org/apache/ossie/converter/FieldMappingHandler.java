@@ -356,6 +356,11 @@ public class FieldMappingHandler implements PipelineStep {
 
             // Skip calculated fields for non-Tableau dialects till we agree on a common dialect.
             if (!DIALECT_TABLEAU.equals(dialect) && isCalculatedExpression(expression, dialect)) {
+                logger.warn(
+                        "Field '{}' has a calculated '{}' expression, which export cannot translate "
+                                + "until a common calculation dialect is agreed; omitting the field",
+                        getString(ossieField, NAME),
+                        dialect);
                 continue;
             }
 

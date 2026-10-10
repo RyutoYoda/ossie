@@ -234,6 +234,31 @@ class OssieToSalesforceConverterTest {
     }
 
     @Test
+    void testCalculatedFieldDroppedForItsDialectIsReported() throws Exception {
+        // Export has no translation for a calculation written in any dialect but Tableau,
+        // so it omits the field. Omitting it without a word leaves the exported model
+        // quietly short of fields the Ossie document declares.
+        Logger fieldLogger = (Logger) LoggerFactory.getLogger(FieldMappingHandler.class);
+        ListAppender<ILoggingEvent> warnings = new ListAppender<>();
+        warnings.start();
+        fieldLogger.addAppender(warnings);
+        try {
+            converter.convert(ossieYamlAnsiSql);
+        } finally {
+            fieldLogger.detachAppender(warnings);
+        }
+
+        List<String> reported = warnings.list.stream()
+                .filter(event -> event.getLevel() == Level.WARN)
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
+        assertTrue(reported.stream().anyMatch(m -> m.contains("customer_email_domain")),
+                "a calculated field omitted for its dialect should be reported: " + reported);
+        assertTrue(reported.stream().anyMatch(m -> m.contains("order_year")),
+                "every omitted calculated field should be reported, not just the first: " + reported);
+    }
+
+    @Test
     void testInvalidRelationshipsFiltered() throws Exception {
         List<String> results = converter.convert(ossieYaml);
         Map<String, Object> sfModel = jsonMapper.readValue(results.get(0), new TypeReference<Map<String, Object>>() {});

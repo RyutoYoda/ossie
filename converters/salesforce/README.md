@@ -277,6 +277,8 @@ and a measurement as `Number`.
 For direct fields, the presence of the `dimension` object determines whether the
 field is exported to `semanticDimensions` or `semanticMeasurements`. A calculated
 Tableau expression follows the converter's existing calculated-dimension path.
+A calculation written in any other dialect has no translation until a common
+calculation dialect is agreed, so the field is omitted with a warning naming it.
 
 On import, Salesforce `Date` and `DateTime` dimensions set `dimension.is_time` to
 `true`; other dimension types set it to `false`. On export, `dimension.is_time`
