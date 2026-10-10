@@ -94,10 +94,12 @@ public class RelationshipMappingHandler implements PipelineStep {
 
         outputData.putAll(mappedData);
 
-        // Apply manual mappings (criteria)
+        // Apply manual mappings (criteria). The Salesforce relationships were mapped from
+        // the filtered list, so criteria have to be rebuilt from that same list: pairing
+        // them with the unfiltered one shifts every relationship that follows a dropped one.
         List<Object> sfRelationships = getList(outputData, SEMANTIC_RELATIONSHIPS);
         if (sfRelationships != null) {
-            reconstructCriteria(ossieRelationships, sfRelationships);
+            reconstructCriteria(validRelationships, sfRelationships);
         }
 
         customExtensionHandler.restoreCustomExtensionsAtLevel(outputData, sourceData, Level.RELATIONSHIPS);
@@ -216,19 +218,21 @@ public class RelationshipMappingHandler implements PipelineStep {
             Object fromColumnsObj = ossieRel.get(FROM_COLUMNS);
             Object toColumnsObj = ossieRel.get(TO_COLUMNS);
 
+            // Each relationship is rebuilt on its own: a relationship whose join columns
+            // cannot be paired gets no criteria, and the ones that follow still get theirs.
             if (fromColumnsObj == null || toColumnsObj == null) {
-                return;
+                continue;
             }
 
             List<Object> fromColumns = asList(fromColumnsObj);
             List<Object> toColumns = asList(toColumnsObj);
 
             if (fromColumns.isEmpty() || toColumns.isEmpty()) {
-                return;
+                continue;
             }
 
             if (fromColumns.size() != toColumns.size()) {
-                return;
+                continue;
             }
 
             List<Map<String, Object>> criteriaArray = new ArrayList<>();
