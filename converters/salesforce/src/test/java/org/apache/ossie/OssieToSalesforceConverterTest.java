@@ -30,6 +30,7 @@ import org.apache.ossie.converter.ConverterFactory;
 import org.apache.ossie.converter.ConversionDirection;
 import org.apache.ossie.converter.CustomExtensionHandler;
 import org.apache.ossie.converter.FieldMappingHandler;
+import org.apache.ossie.converter.RelationshipMappingHandler;
 import org.apache.ossie.validator.SchemaValidator;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,6 +44,8 @@ import org.apache.ossie.converter.pipeline.PipelineConfigLoader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -346,6 +349,70 @@ class OssieToSalesforceConverterTest {
         assertEquals(1, criteria.size());
         assertEquals("product_id", criteria.get(0).get("leftSemanticFieldApiName"));
         assertEquals("product_id", criteria.get(0).get("rightSemanticFieldApiName"));
+    }
+
+    @Test
+    void testRelationshipWithUnpairableJoinColumnsIsNotExported() throws Exception {
+        // The two sides name a different number of join columns, so the relationship has no
+        // criteria to export. Salesforce stores a relationship with no criteria as an enabled
+        // relationship that joins nothing, so it must not reach the payload at all.
+        String model = "version: 0.2.0.dev0\n"
+                + "name: Imported_Model\n"
+                + "datasets:\n"
+                + dataset("Customers", "customer_id", "tenant_id")
+                + dataset("Orders", "customer_id", "product_id")
+                + dataset("Products", "product_id")
+                + "relationships:\n"
+                + "- name: Customers_Orders\n"
+                + "  from: Customers\n"
+                + "  to: Orders\n"
+                + "  from_columns: [customer_id, tenant_id]\n"
+                + "  to_columns: [customer_id]\n"
+                + relationship("Orders_Products", "Orders", "Products", "product_id");
+
+        List<String> results = converter.convert(model);
+        Map<String, Object> sfModel = jsonMapper.readValue(results.get(0), new TypeReference<Map<String, Object>>() {});
+
+        List<Map<String, Object>> relationships = (List<Map<String, Object>>) sfModel.get("semanticRelationships");
+        assertNotNull(relationships);
+        assertEquals(List.of("Orders_Products"), exportedRelationshipNames(relationships),
+                "a relationship that cannot produce criteria must not be exported");
+    }
+
+    @Test
+    void testRelationshipDeclaringNoJoinColumnsIsFilteredOut() {
+        // The Ossie schema requires from_columns and to_columns and gives each a minimum of
+        // one entry, so a relationship reaches the handler without join columns only when a
+        // caller builds the model in memory instead of parsing a document. It has nothing to
+        // join on either way, so it must not survive the filter.
+        Map<String, Object> noJoinColumns = new LinkedHashMap<>(
+                Map.of("name", "Customers_Orders", "from", "Customers", "to", "Orders"));
+        Map<String, Object> joined = new LinkedHashMap<>(Map.of(
+                "name", "Orders_Products", "from", "Orders", "to", "Products",
+                "from_columns", List.of("product_id"), "to_columns", List.of("product_id")));
+        Map<String, Object> sourceData = new LinkedHashMap<>(
+                Map.of("relationships", new ArrayList<>(List.of(noJoinColumns, joined))));
+        Map<String, Object> outputData = new LinkedHashMap<>(Map.of("semanticDataObjects", List.of(
+                dataObjectWithDimension("Customers", "customer_id"),
+                dataObjectWithDimension("Orders", "product_id"),
+                dataObjectWithDimension("Products", "product_id"))));
+
+        new RelationshipMappingHandler(ConversionDirection.OSSIE_TO_SALESFORCE,
+                new CustomExtensionHandler(jsonMapper))
+                .execute(sourceData, outputData, new LinkedHashMap<>());
+
+        List<Map<String, Object>> kept = (List<Map<String, Object>>) sourceData.get("relationships");
+        assertEquals(List.of("Orders_Products"), kept.stream().map(rel -> rel.get("name")).toList(),
+                "a relationship with no join columns must not survive the filter");
+    }
+
+    private static Map<String, Object> dataObjectWithDimension(String apiName, String fieldApiName) {
+        return Map.of("apiName", apiName, "semanticDimensions", List.of(Map.of("apiName", fieldApiName)));
+    }
+
+    /** The apiName of every relationship the exported model carries, in export order. */
+    private List<String> exportedRelationshipNames(List<Map<String, Object>> sfRelationships) {
+        return sfRelationships.stream().map(sfRel -> String.valueOf(sfRel.get("apiName"))).toList();
     }
 
     @Test

@@ -294,6 +294,12 @@ columns, and a dataset is free to name a key column in `primary_key` and nowhere
 else, so a key column no field declares would otherwise take every relationship
 joining on it down with it.
 
+**Unpairable join columns** drop the relationship. `from_columns` and `to_columns`
+pair up positionally into join criteria, so a relationship whose two sides declare
+a different number of them has no criteria to export. Salesforce accepts such a
+relationship and stores it as an enabled relationship with empty criteria, which
+joins nothing, so it is left out of the payload instead.
+
 ### Metric expressions
 
 Metrics select `TABLEAU`, then `SNOWFLAKE`, then `ANSI_SQL`, then

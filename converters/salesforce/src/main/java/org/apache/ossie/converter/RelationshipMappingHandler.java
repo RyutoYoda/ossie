@@ -215,25 +215,9 @@ public class RelationshipMappingHandler implements PipelineStep {
                 sfRel.put(RIGHT_SEMANTIC_DEFINITION_API_NAME, toEntity);
             }
 
-            Object fromColumnsObj = ossieRel.get(FROM_COLUMNS);
-            Object toColumnsObj = ossieRel.get(TO_COLUMNS);
-
-            // Each relationship is rebuilt on its own: a relationship whose join columns
-            // cannot be paired gets no criteria, and the ones that follow still get theirs.
-            if (fromColumnsObj == null || toColumnsObj == null) {
-                continue;
-            }
-
-            List<Object> fromColumns = asList(fromColumnsObj);
-            List<Object> toColumns = asList(toColumnsObj);
-
-            if (fromColumns.isEmpty() || toColumns.isEmpty()) {
-                continue;
-            }
-
-            if (fromColumns.size() != toColumns.size()) {
-                continue;
-            }
+            // validateColumnPairing has already confirmed these pair up one to one.
+            List<Object> fromColumns = asList(ossieRel.get(FROM_COLUMNS));
+            List<Object> toColumns = asList(ossieRel.get(TO_COLUMNS));
 
             List<Map<String, Object>> criteriaArray = new ArrayList<>();
             for (int j = 0; j < fromColumns.size(); j++) {
@@ -345,6 +329,10 @@ public class RelationshipMappingHandler implements PipelineStep {
             List<Object> fromColumns = getList(ossieRel, FROM_COLUMNS);
             List<Object> toColumns = getList(ossieRel, TO_COLUMNS);
 
+            if (!validateColumnPairing(fromColumns, toColumns, relName)) {
+                continue;
+            }
+
             if (!validateColumns(fromColumns, fromDataObject, fromEntity, relName) ||
                 !validateColumns(toColumns, toDataObject, toEntity, relName)) {
                 continue;
@@ -352,6 +340,33 @@ public class RelationshipMappingHandler implements PipelineStep {
             validRelationships.add(ossieRel);
         }
         return validRelationships;
+    }
+
+    /**
+     * Validates that the two column lists pair up into join criteria. A relationship that
+     * declares no join columns, or whose two sides declare a different number of them, has
+     * no criteria to export. Salesforce accepts such a relationship and stores it as an
+     * enabled relationship that joins nothing, so drop it here instead of exporting a join
+     * that cannot be performed.
+     *
+     * @param fromColumns Columns on the source side of the relationship
+     * @param toColumns Columns on the target side of the relationship
+     * @param relName The relationship name (for logging)
+     * @return true if the columns pair up one to one, false otherwise
+     */
+    private boolean validateColumnPairing(List<Object> fromColumns, List<Object> toColumns, String relName) {
+        if (fromColumns == null || toColumns == null || fromColumns.isEmpty() || toColumns.isEmpty()) {
+            logger.debug("Removing relationship '{}' - no join columns declared", relName);
+            return false;
+        }
+
+        if (fromColumns.size() != toColumns.size()) {
+            logger.debug("Removing relationship '{}' - {} source columns cannot pair with {} target columns",
+                    relName, fromColumns.size(), toColumns.size());
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -365,10 +380,6 @@ public class RelationshipMappingHandler implements PipelineStep {
      */
     private boolean validateColumns(List<Object> columns, Map<String, Object> dataObject,
                                      String entityName, String relName) {
-        if (columns == null || columns.isEmpty()) {
-            return true;
-        }
-
         for (Object colObj : columns) {
             String columnName = (String) colObj;
             if (!fieldExistsInDataObject(dataObject, columnName)) {
