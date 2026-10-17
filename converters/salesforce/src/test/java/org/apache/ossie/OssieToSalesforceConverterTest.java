@@ -339,10 +339,7 @@ class OssieToSalesforceConverterTest {
                 + relationship("Orders_Products", "Orders", "Products", "product_id");
 
         ValidationException exception = assertThrows(ValidationException.class, () -> converter.convert(model));
-         assertTrue(exception.getMessage().contains("Customers_Orders"),
-                 "the rejection must name the relationship that cannot be converted");
-         assertTrue(exception.getMessage().contains("got 2 and 1"),
-                 "the rejection must come from the column-count rule");
+        assertTrue(exception.getMessage().contains("Customers_Orders"),
                 "the rejection must name the relationship that cannot be converted");
         assertTrue(exception.getMessage().contains("got 2 and 1"),
                 "the rejection must come from the column-count rule");
@@ -397,10 +394,7 @@ class OssieToSalesforceConverterTest {
 
         ValidationException exception = assertThrows(ValidationException.class,
                 () -> handler.execute(sourceData, outputData, new LinkedHashMap<>()));
-         assertTrue(exception.getMessage().contains("Customers_Orders"),
-                 "the rejection must name the relationship that cannot be converted");
-         assertTrue(exception.getMessage().contains("got 0 and 0"),
-                "the rejection must come from the column-count rule");
+        assertTrue(exception.getMessage().contains("Customers_Orders"),
                 "the rejection must name the relationship that cannot be converted");
         assertTrue(exception.getMessage().contains("got 0 and 0"),
                 "the rejection must come from the column-count rule");
