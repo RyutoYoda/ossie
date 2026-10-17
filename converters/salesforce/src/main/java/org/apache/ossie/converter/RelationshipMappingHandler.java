@@ -327,14 +327,6 @@ public class RelationshipMappingHandler implements PipelineStep {
             String fromEntity = getString(ossieRel, FROM);
             String toEntity = getString(ossieRel, TO);
 
-            Map<String, Object> fromDataObject = findDataObjectByName(sfDataObjects, fromEntity);
-            Map<String, Object> toDataObject = findDataObjectByName(sfDataObjects, toEntity);
-
-            if (fromDataObject == null || toDataObject == null) {
-                logger.debug("Removing relationship '{}' - entity not found", relName);
-                continue;
-            }
-
             List<Object> fromColumns = getList(ossieRel, FROM_COLUMNS);
             List<Object> toColumns = getList(ossieRel, TO_COLUMNS);
 
@@ -345,6 +337,14 @@ public class RelationshipMappingHandler implements PipelineStep {
                         relName,
                         fromColumns == null ? 0 : fromColumns.size(),
                         toColumns == null ? 0 : toColumns.size()));
+            }
+
+            Map<String, Object> fromDataObject = findDataObjectByName(sfDataObjects, fromEntity);
+            Map<String, Object> toDataObject = findDataObjectByName(sfDataObjects, toEntity);
+
+            if (fromDataObject == null || toDataObject == null) {
+                logger.debug("Removing relationship '{}' - entity not found", relName);
+                continue;
             }
 
             if (!validateColumns(fromColumns, fromDataObject, fromEntity, relName) ||

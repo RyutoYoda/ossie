@@ -341,6 +341,34 @@ class OssieToSalesforceConverterTest {
         ValidationException exception = assertThrows(ValidationException.class, () -> converter.convert(model));
         assertTrue(exception.getMessage().contains("Customers_Orders"),
                 "the rejection must name the relationship that cannot be converted");
+        assertTrue(exception.getMessage().contains("got 2 and 1"),
+                "the rejection must come from the column-count rule");
+    }
+
+    @Test
+    void testRelationshipWithUndeclaredEndpointAndUnpairableJoinColumnsIsRejected() {
+        // The column-count check must not depend on the relationship's endpoints existing.
+        // A relationship naming an undeclared dataset used to be dropped by the entity lookup
+        // before the column-count check ran, so this case was silently filtered instead of
+        // rejected.
+        String model = "version: 0.2.0.dev0\n"
+                + "name: Imported_Model\n"
+                + "datasets:\n"
+                + dataset("Orders", "customer_id", "product_id")
+                + dataset("Products", "product_id")
+                + "relationships:\n"
+                + "- name: Customers_Orders\n"
+                + "  from: Customer\n"
+                + "  to: Orders\n"
+                + "  from_columns: [customer_id, tenant_id]\n"
+                + "  to_columns: [customer_id]\n"
+                + relationship("Orders_Products", "Orders", "Products", "product_id");
+
+        ValidationException exception = assertThrows(ValidationException.class, () -> converter.convert(model));
+        assertTrue(exception.getMessage().contains("Customers_Orders"),
+                "the rejection must name the relationship that cannot be converted");
+        assertTrue(exception.getMessage().contains("got 2 and 1"),
+                "the rejection must come from the column-count rule, not the endpoint lookup");
     }
 
     @Test
@@ -368,6 +396,8 @@ class OssieToSalesforceConverterTest {
                 () -> handler.execute(sourceData, outputData, new LinkedHashMap<>()));
         assertTrue(exception.getMessage().contains("Customers_Orders"),
                 "the rejection must name the relationship that cannot be converted");
+        assertTrue(exception.getMessage().contains("got 0 and 0"),
+                "the rejection must come from the column-count rule");
     }
 
     private static Map<String, Object> dataObjectWithDimension(String apiName, String fieldApiName) {
