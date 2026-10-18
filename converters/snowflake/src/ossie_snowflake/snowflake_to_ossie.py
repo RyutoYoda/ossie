@@ -40,7 +40,7 @@ import warnings
 
 import yaml
 from sqlglot import exp, parse_one
-from sqlglot.errors import ParseError
+from sqlglot.errors import ParseError, TokenError
 
 from ._common import (
     DIALECT_ANSI,
@@ -49,6 +49,7 @@ from ._common import (
     TIME_DATATYPES,
     is_portable_sql,
     parse_snowflake_datatype,
+    require_list,
     require_mappings,
     write_stash,
 )
