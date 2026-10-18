@@ -160,7 +160,7 @@ def write_stash(obj, data):
         return
     payload = {"_v": STASH_VERSION}
     payload.update(data)
-    blob = json.dumps(payload, sort_keys=True)
+    blob = json.dumps(payload, sort_keys=True, default=str)
     extensions = obj.setdefault("custom_extensions", [])
     for extension in extensions:
         if extension.get("vendor_name") == VENDOR:
