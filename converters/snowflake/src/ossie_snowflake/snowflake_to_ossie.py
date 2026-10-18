@@ -203,8 +203,18 @@ def _convert_table(table):
     result = {"name": name, "source": _parse_base_table(table.get("base_table"), name)}
 
     primary_key = table.get("primary_key")
-    if isinstance(primary_key, dict) and primary_key.get("columns"):
-        result["primary_key"] = list(primary_key["columns"])
+    if primary_key is not None and not isinstance(primary_key, dict):
+        raise SnowflakeConversionError(
+            f"Table '{name}': 'primary_key' must be a mapping, got "
+            f"{type(primary_key).__name__}"
+        )
+    columns = require_list(
+        (primary_key or {}).get("columns"),
+        f"Table '{name}': 'primary_key.columns'",
+        SnowflakeConversionError,
+    )
+    if columns:
+        result["primary_key"] = list(columns)
 
     unique_keys = [
         list(uk["columns"])
