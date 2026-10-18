@@ -462,7 +462,7 @@ def _qualify_columns(expr, dataset, metric_name):
     """
     try:
         tree = parse_one(expr, read=DIALECT_SNOWFLAKE.lower())
-    except ParseError:
+    except (ParseError, TokenError, RecursionError):
         return _warn_unqualified(expr, metric_name, dataset)
 
     offsets = set()
