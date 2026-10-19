@@ -377,7 +377,7 @@ def _convert_named_expr(entry, kind, qualify_with=None, sibling_renames=None):
         # aggregating a column that happens to share its name, like `revenue`
         # over `SUM(revenue)`, refers to the column, not to itself as a metric.
         other_sibling_renames = {
-            original: final for original, final in sibling_renames.items()
+            original: final for original, final in (sibling_renames or {}).items()
             if original != original_name
         }
         expr = _qualify_columns(
