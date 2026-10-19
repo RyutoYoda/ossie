@@ -360,7 +360,18 @@ def _convert_named_expr(entry, kind, qualify_with=None, sibling_renames=None):
     name = entry.get("name")
     if _is_blank(name):
         raise SnowflakeConversionError(f"Missing required 'name' in {kind}")
+    original_name = name
     name = sibling_renames.get(name, name) if sibling_renames else name
+    # A metric's own name is excluded from its own sibling lookup: a metric
+    # aggregating a column that happens to share its name, like `revenue` over
+    # `SUM(revenue)`, refers to the column, not to itself as a metric.
+    other_sibling_renames = (
+        {
+            original: final for original, final in sibling_renames.items()
+            if original != original_name
+        }
+        if sibling_renames else sibling_renames
+    )
 
     expr = entry.get("expr")
     if expr is None or (isinstance(expr, str) and not expr.strip()):
@@ -372,7 +383,9 @@ def _convert_named_expr(entry, kind, qualify_with=None, sibling_renames=None):
     expr = str(expr)
 
     if qualify_with:
-        expr = _qualify_columns(expr, qualify_with, name, sibling_renames=sibling_renames)
+        expr = _qualify_columns(
+            expr, qualify_with, name, sibling_renames=other_sibling_renames
+        )
 
     # Ossie is a hub, and every exporter picks its own dialect, then ANSI_SQL,
     # then OSSIE_SQL_2026, dropping any field labelled with none of them. A
@@ -530,7 +543,10 @@ def _qualify_columns(expr, dataset, metric_name, sibling_renames=None):
     A bare reference to another metric on the same table is different: once
     lifted, that name is a model-level metric, not a dataset field, so it is left
     unqualified -- with the sibling's own final name spliced in if lifting
-    renamed it, per ``sibling_renames``.
+    renamed it, per ``sibling_renames``. The caller excludes a metric's own name
+    from ``sibling_renames`` for its own expression, so a metric aggregating a
+    column that happens to share its name, like ``revenue`` over ``SUM(revenue)``,
+    qualifies the column instead of reading as a self-reference.
 
     The parse tree is only used to locate the columns; the prefixes and renames
     are spliced into the original text at the offsets it reports, so everything
@@ -541,8 +557,8 @@ def _qualify_columns(expr, dataset, metric_name, sibling_renames=None):
         expr: The metric expression as written in the Snowflake YAML.
         dataset: The Ossie dataset name the metric is being lifted from.
         metric_name: The metric's name, used in the warning message.
-        sibling_renames: Maps every metric name on this table to the name it is
-            lifted under (identity for one that did not collide).
+        sibling_renames: Maps every other metric name on this table to the name
+            it is lifted under (identity for one that did not collide).
 
     Returns:
         The expression with every bare column reference qualified and every bare

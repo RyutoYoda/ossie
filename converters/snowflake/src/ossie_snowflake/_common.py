@@ -87,7 +87,7 @@ OPAQUE_TYPES = frozenset({
     "GEOGRAPHY", "GEOMETRY", "VECTOR", "FILE",
 })
 
-_TYPE_ARGS_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_ ]*?)\s*(?:\(([^)]*)\))?\s*$")
+_TYPE_ARGS_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_ ]*?)\s*(?:\((.*)\))?\s*$")
 
 
 def parse_snowflake_datatype(data_type, context):

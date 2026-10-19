@@ -631,6 +631,31 @@ class TestLiftedMetrics:
             == "SUM(orders.amount)"
         )
 
+    def test_lifting_qualifies_a_metric_named_like_its_own_column(self):
+        # "revenue" aggregates the "revenue" column -- that's a self-reference to
+        # the column, not to the sibling metric of the same name. "tax" refers to
+        # the "revenue" metric genuinely, and stays unqualified.
+        ossie = _convert(
+            _minimal_snowflake(
+                tables=[
+                    {
+                        "name": "orders",
+                        "base_table": _base_table(),
+                        "metrics": [
+                            {"name": "revenue", "expr": "SUM(revenue)"},
+                            {"name": "tax", "expr": "revenue * 0.1"},
+                        ],
+                    }
+                ]
+            )
+        )
+        expressions = {
+            m["name"]: m["expression"]["dialects"][0]["expression"]
+            for m in ossie["metrics"]
+        }
+        assert expressions["revenue"] == "SUM(orders.revenue)"
+        assert expressions["tax"] == "revenue * 0.1"
+
     def test_a_model_level_metric_is_not_qualified(self):
         # It is already written against the model, so there is no table to add.
         ossie = _convert(
@@ -954,6 +979,18 @@ class TestStashAndDrop:
         )
         assert result["datatype"] == "Opaque"
         assert read_stash(result)["data_type"] == "VARIANT"
+
+    def test_an_opaque_type_with_nested_parens_keeps_its_full_type_string(self):
+        # ARRAY(NUMBER(10,2)) has parens inside its own args; the base type is
+        # still ARRAY, so it must resolve to Opaque with the whole string intact
+        # rather than falling into the unparseable-type warning.
+        result = _silently(
+            _convert_named_expr,
+            {"name": "f", "expr": "F", "data_type": "ARRAY(NUMBER(10,2))"},
+            "field",
+        )
+        assert result["datatype"] == "Opaque"
+        assert read_stash(result)["data_type"] == "ARRAY(NUMBER(10,2))"
 
     def test_nothing_vendor_specific_means_no_custom_extensions(self):
         result = _convert_named_expr({"name": "f", "expr": "F"}, "field")
