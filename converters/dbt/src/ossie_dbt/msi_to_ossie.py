@@ -35,6 +35,7 @@ from ossie import (
 from ossie_dbt.converter_issues import ConverterIssue, ConverterIssueType, ConverterResult
 from ossie_dbt.expression_utils import _is_constant_expr
 from ossie_dbt.filter_utils import _collect_filter_sql, _merge_filter_sqls
+from ossie_dbt.meta_utils import _meta_to_custom_extensions
 
 from metricflow_semantic_interfaces.enum_extension import assert_values_exhausted
 from metricflow_semantic_interfaces.implementations.semantic_manifest import PydanticSemanticManifest
@@ -143,6 +144,7 @@ class MSIToOssieConverter:
                     name=metric.name,
                     expression=self._make_expression(expr),
                     description=metric.description,
+                    custom_extensions=_meta_to_custom_extensions(metric.config),
                 )
             )
             if len(manifest.semantic_models) > 1 and self._aggregates_a_constant(metric):
@@ -185,6 +187,7 @@ class MSIToOssieConverter:
             unique_keys=unique_keys if unique_keys else None,
             description=sm.description,
             fields=fields if fields else None,
+            custom_extensions=_meta_to_custom_extensions(sm.config),
         )
 
     def _convert_dimension(self, dim: Dimension) -> OssieField:
@@ -197,6 +200,7 @@ class MSIToOssieConverter:
             dimension=OssieDimension(is_time=is_time),
             label=dim.label,
             description=dim.description,
+            custom_extensions=_meta_to_custom_extensions(dim.config),
         )
 
     def _convert_entity(self, entity: Entity) -> OssieField:
@@ -207,6 +211,7 @@ class MSIToOssieConverter:
             expression=self._make_expression(expr),
             label=entity.label,
             description=entity.description,
+            custom_extensions=_meta_to_custom_extensions(entity.config),
         )
 
     def _convert_measure(self, measure: Measure) -> OssieField:
@@ -217,6 +222,7 @@ class MSIToOssieConverter:
             expression=self._make_expression(expr),
             label=measure.label,
             description=measure.description,
+            custom_extensions=_meta_to_custom_extensions(measure.config),
         )
 
     @staticmethod

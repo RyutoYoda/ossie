@@ -36,6 +36,7 @@ from ossie_dbt.expression_utils import (
     _strip_qualifier,
     _try_parse_ratio,
 )
+from ossie_dbt.meta_utils import _meta_config_from_custom_extensions
 
 from metricflow_semantic_interfaces.implementations.elements.dimension import (
     PydanticDimension,
@@ -44,6 +45,9 @@ from metricflow_semantic_interfaces.implementations.elements.dimension import (
 from metricflow_semantic_interfaces.implementations.elements.entity import PydanticEntity
 from metricflow_semantic_interfaces.implementations.elements.measure import (
     PydanticMeasureAggregationParameters,
+)
+from metricflow_semantic_interfaces.implementations.element_config import (
+    PydanticSemanticLayerElementConfig,
 )
 from metricflow_semantic_interfaces.implementations.metric import (
     PydanticMetric,
@@ -159,6 +163,7 @@ class OssieToMSIConverter:
             entities=entities,
             dimensions=dimensions,
             measures=[],
+            config=_meta_config_from_custom_extensions(dataset.custom_extensions),
         )
 
     @staticmethod
@@ -209,6 +214,7 @@ class OssieToMSIConverter:
         Aggregation info lives on metrics (`metric_aggregation_params`), not on
         semantic model measures, so there is no measure classification step.
         """
+        config = _meta_config_from_custom_extensions(field.custom_extensions)
         if field.name in primary_key_cols:
             entities.append(
                 PydanticEntity(
@@ -218,7 +224,7 @@ class OssieToMSIConverter:
                     description=field.description,
                     label=field.label,
                     role=None,
-                    config=None,
+                    config=config,
                 )
             )
             return
@@ -231,7 +237,7 @@ class OssieToMSIConverter:
                     description=field.description,
                     label=field.label,
                     role=None,
-                    config=None,
+                    config=config,
                 )
             )
             return
@@ -244,7 +250,7 @@ class OssieToMSIConverter:
                     description=field.description,
                     label=field.label,
                     role=None,
-                    config=None,
+                    config=config,
                 )
             )
             return
@@ -258,7 +264,7 @@ class OssieToMSIConverter:
                     expr=expr_or_none,
                     description=field.description,
                     label=field.label,
-                    config=None,
+                    config=config,
                 )
             )
             return
@@ -270,7 +276,7 @@ class OssieToMSIConverter:
                 expr=expr_or_none,
                 description=field.description,
                 label=field.label,
-                config=None,
+                config=config,
             )
         )
 
@@ -284,7 +290,15 @@ class OssieToMSIConverter:
         for metric in ossie_sm.metrics or []:
             expr_str = self._get_expression(metric.expression)
             try:
-                metrics.extend(self._convert_metric(metric.name, expr_str, metric.description, ossie_sm.datasets))
+                metrics.extend(
+                    self._convert_metric(
+                        metric.name,
+                        expr_str,
+                        metric.description,
+                        ossie_sm.datasets,
+                        config=_meta_config_from_custom_extensions(metric.custom_extensions),
+                    )
+                )
             except _UnresolvedRowCountDataset:
                 # Also drops a ratio and its sub-metrics as a whole, so nothing references a missing metric.
                 issues.append(
@@ -298,6 +312,7 @@ class OssieToMSIConverter:
         expr_str: str,
         description: Optional[str],
         datasets: List[OssieDataset],
+        config: Optional[PydanticSemanticLayerElementConfig] = None,
     ) -> List[PydanticMetric]:
         """Return one or more PydanticMetric objects for the given Ossie expression.
 
@@ -342,7 +357,7 @@ class OssieToMSIConverter:
                     ),
                     filter=None,
                     metadata=None,
-                    config=None,
+                    config=config,
                 )
             ]
 
@@ -364,7 +379,7 @@ class OssieToMSIConverter:
                 ),
                 filter=None,
                 metadata=None,
-                config=None,
+                config=config,
             )
             return [*num_metrics, *den_metrics, ratio_metric]
 
@@ -396,7 +411,7 @@ class OssieToMSIConverter:
                 ),
                 filter=None,
                 metadata=None,
-                config=None,
+                config=config,
             )
         ]
 

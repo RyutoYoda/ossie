@@ -138,6 +138,18 @@ manifest_json = result.output.model_dump_json(by_alias=True, exclude_none=True, 
 - Anything else → SIMPLE metric with the raw expression stored verbatim
 - Time dimensions always receive `TimeGranularity.DAY` (Ossie carries no granularity field)
 
+Non-empty dbt `config.meta` is carried on the matching dataset, field, or metric as
+a `DBT` custom extension. For example, `config.meta: {unit: USD}` becomes:
+
+```yaml
+custom_extensions:
+  - vendor_name: DBT
+    data: '{"unit": "USD"}'
+```
+
+The reverse converter restores this JSON object to `config.meta`; empty metadata is
+omitted.
+
 ## Development
 
 ```bash
@@ -145,6 +157,10 @@ cd converters/dbt
 uv sync
 uv run pytest
 ```
+
+The test dependency and lockfile pin dbt Core and the DuckDB adapter so
+`uv run pytest` always executes the real-dbt `config.meta` E2E; the test fails if
+the environment resolves to the dbt Cloud CLI instead of dbt Core.
 
 Generate new Syrupy snapshots:
 ```bash
