@@ -354,8 +354,23 @@ public class FieldMappingHandler implements PipelineStep {
             String expression = expressionInfo.expression();
             String dialect = expressionInfo.dialect();
 
-            // Skip calculated fields for non-Tableau dialects till we agree on a common dialect.
+            // Export only translates a calculated expression written in the Tableau dialect.
             if (!DIALECT_TABLEAU.equals(dialect) && isCalculatedExpression(expression, dialect)) {
+                if (dialect == null) {
+                    logger.warn(
+                            "Field '{}' in dataset '{}' has a calculated expression that declares no "
+                                    + "dialect, so export cannot translate it; omitting the field",
+                            getString(ossieField, NAME),
+                            getString(ossieDataset, NAME));
+                } else {
+                    logger.warn(
+                            "Field '{}' in dataset '{}' has a calculated '{}' expression, which export "
+                                    + "only translates in the '{}' dialect; omitting the field",
+                            getString(ossieField, NAME),
+                            getString(ossieDataset, NAME),
+                            dialect,
+                            DIALECT_TABLEAU);
+                }
                 continue;
             }
 
@@ -722,6 +737,13 @@ public class FieldMappingHandler implements PipelineStep {
 
         for (Object calcDimObj : calcDims) {
             Map<String, Object> calcDim = asMap(calcDimObj);
+
+            // Salesforce returns formulas HTML-escaped; decode before the dimension is
+            // either converted to a field or preserved in custom_extensions.
+            String expressionValue = getString(calcDim, EXPRESSION);
+            if (expressionValue != null) {
+                calcDim.put(EXPRESSION, SalesforceFormulaEscaping.unescape(expressionValue));
+            }
 
             List<Object> dependencies = getList(calcDim, DEPENDENCIES);
             String targetDataObject = getSingleDataObjectFromDependencies(dependencies);
