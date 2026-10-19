@@ -287,7 +287,7 @@ def _convert_table(table, used_metric_names=None):
     sibling_renames = {}
     for entry in metric_entries:
         metric_name = entry.get("name")
-        if not metric_name:
+        if _is_blank(metric_name):
             continue
         if metric_name in used_metric_names:
             final_name = f"{name}_{metric_name}"
@@ -362,16 +362,6 @@ def _convert_named_expr(entry, kind, qualify_with=None, sibling_renames=None):
         raise SnowflakeConversionError(f"Missing required 'name' in {kind}")
     original_name = name
     name = sibling_renames.get(name, name) if sibling_renames else name
-    # A metric's own name is excluded from its own sibling lookup: a metric
-    # aggregating a column that happens to share its name, like `revenue` over
-    # `SUM(revenue)`, refers to the column, not to itself as a metric.
-    other_sibling_renames = (
-        {
-            original: final for original, final in sibling_renames.items()
-            if original != original_name
-        }
-        if sibling_renames else sibling_renames
-    )
 
     expr = entry.get("expr")
     if expr is None or (isinstance(expr, str) and not expr.strip()):
@@ -383,6 +373,13 @@ def _convert_named_expr(entry, kind, qualify_with=None, sibling_renames=None):
     expr = str(expr)
 
     if qualify_with:
+        # A metric's own name is excluded from its own sibling lookup: a metric
+        # aggregating a column that happens to share its name, like `revenue`
+        # over `SUM(revenue)`, refers to the column, not to itself as a metric.
+        other_sibling_renames = {
+            original: final for original, final in sibling_renames.items()
+            if original != original_name
+        }
         expr = _qualify_columns(
             expr, qualify_with, name, sibling_renames=other_sibling_renames
         )
