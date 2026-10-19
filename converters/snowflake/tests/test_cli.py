@@ -17,8 +17,6 @@
 
 """Tests for the ossie-snowflake CLI."""
 
-import warnings
-
 import pytest
 import yaml
 
@@ -38,6 +36,28 @@ SNOWFLAKE_MODEL = {
     ],
 }
 
+# A literal Ossie document, not built by running the importer, so an importer bug
+# cannot also fail every export-direction CLI test below.
+OSSIE_MODEL = {
+    "version": "0.2.0.dev0",
+    "name": "retail",
+    "datasets": [
+        {
+            "name": "orders",
+            "source": "DB.SCH.FCT_ORDER",
+            "fields": [
+                {
+                    "name": "order_id",
+                    "expression": {
+                        "dialects": [{"dialect": "ANSI_SQL", "expression": "ORDER_ID"}]
+                    },
+                    "dimension": {"is_time": False},
+                }
+            ],
+        }
+    ],
+}
+
 
 @pytest.fixture
 def snowflake_file(tmp_path):
@@ -47,11 +67,9 @@ def snowflake_file(tmp_path):
 
 
 @pytest.fixture
-def ossie_file(tmp_path, snowflake_file):
+def ossie_file(tmp_path):
     path = tmp_path / "ossie.yaml"
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        cli.main(["snowflake-to-ossie", "-i", str(snowflake_file), "-o", str(path)])
+    path.write_text(yaml.dump(OSSIE_MODEL))
     return path
 
 
@@ -112,20 +130,27 @@ class TestErrors:
         assert "snowflake-to-ossie" in out
         assert "ossie-to-snowflake" in out
 
-    def test_a_conversion_error_exits_non_zero_without_a_traceback(self, tmp_path, capsys):
+    @pytest.mark.parametrize("subcommand", ["snowflake-to-ossie", "ossie-to-snowflake"])
+    def test_a_conversion_error_exits_non_zero_without_a_traceback(
+        self, subcommand, tmp_path, capsys
+    ):
+        # Both directions raise their own conversion-error type; a mismatch
+        # between the subcommand and the error type it catches would otherwise
+        # reach the user as an uncaught traceback instead of this message.
         bad = tmp_path / "bad.yaml"
         bad.write_text("- not a mapping\n")
         with pytest.raises(SystemExit) as excinfo:
-            cli.main(["snowflake-to-ossie", "-i", str(bad), "-o", str(tmp_path / "o.yaml")])
+            cli.main([subcommand, "-i", str(bad), "-o", str(tmp_path / "o.yaml")])
         assert excinfo.value.code == 1
         assert "Error: " in capsys.readouterr().err
 
-    def test_a_failed_conversion_writes_no_output_file(self, tmp_path):
+    @pytest.mark.parametrize("subcommand", ["snowflake-to-ossie", "ossie-to-snowflake"])
+    def test_a_failed_conversion_writes_no_output_file(self, subcommand, tmp_path):
         bad = tmp_path / "bad.yaml"
         bad.write_text("- not a mapping\n")
         out = tmp_path / "o.yaml"
         with pytest.raises(SystemExit):
-            cli.main(["snowflake-to-ossie", "-i", str(bad), "-o", str(out)])
+            cli.main([subcommand, "-i", str(bad), "-o", str(out)])
         assert not out.exists()
 
     def test_a_missing_input_file_is_reported_like_any_other_error(

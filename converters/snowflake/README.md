@@ -72,7 +72,9 @@ mapping, so the exporter omits `data_type` and emits a warning.
 On import, a Snowflake type with no Ossie counterpart (`VARIANT`, `OBJECT`,
 `ARRAY`, `MAP`, `BINARY`, `VARBINARY`, `GEOGRAPHY`, `GEOMETRY`, `VECTOR`,
 `FILE`) becomes `Opaque`, and the concrete Snowflake type is recorded in the
-field's `SNOWFLAKE` `custom_extensions` entry so the mapping stays reversible.
+field's `SNOWFLAKE` `custom_extensions` entry. `ossie-to-snowflake` does not
+read this back out yet, so round-tripping such a field still loses its
+concrete type on export.
 
 ## Import Mapping
 

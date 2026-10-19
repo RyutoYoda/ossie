@@ -340,9 +340,24 @@ class TestConvertNamedExpr:
         with pytest.raises(SnowflakeConversionError, match="Missing required 'name'"):
             _convert_named_expr(entry, "field")
 
-    @pytest.mark.parametrize("expr", [None, ""])
+    @pytest.mark.parametrize("expr", [None, "", "   "])
     def test_a_missing_expr_is_an_error(self, expr):
         with pytest.raises(SnowflakeConversionError, match="Missing required 'expr'"):
+            _convert_named_expr({"name": "f", "expr": expr}, "field")
+
+    def test_a_numeric_expr_of_zero_is_not_treated_as_missing(self):
+        # `0` is a valid (if unusual) constant expression, and falsy in Python --
+        # a plain truthiness check would otherwise mistake it for absent.
+        result = _convert_named_expr({"name": "f", "expr": 0}, "field")
+        assert result["expression"]["dialects"][0]["expression"] == "0"
+
+    def test_a_numeric_expr_is_converted_to_text(self):
+        result = _convert_named_expr({"name": "f", "expr": 3.5}, "field")
+        assert result["expression"]["dialects"][0]["expression"] == "3.5"
+
+    @pytest.mark.parametrize("expr", [True, ["X"], {"a": 1}])
+    def test_an_expr_of_the_wrong_type_is_rejected(self, expr):
+        with pytest.raises(SnowflakeConversionError, match="'expr' in field 'f' must be"):
             _convert_named_expr({"name": "f", "expr": expr}, "field")
 
     def test_the_kind_appears_in_the_error(self):
@@ -466,6 +481,18 @@ class TestConvertTable:
         assert "metrics" not in dataset
         assert [m["name"] for m in metrics] == ["total"]
 
+    def test_a_unique_key_whose_columns_is_not_a_list_is_rejected(self):
+        # A bare string is iterable, so without this check it would otherwise
+        # silently split into a unique key per character.
+        with pytest.raises(SnowflakeConversionError, match="'unique_keys.columns'"):
+            _convert_table(
+                {
+                    "name": "t",
+                    "base_table": _base_table(),
+                    "unique_keys": [{"columns": "email"}],
+                }
+            )
+
 
 # ---------------------------------------------------------------------------
 # metrics lifted from tables
@@ -501,8 +528,9 @@ class TestLiftedMetrics:
         )
         assert [m["name"] for m in ossie["metrics"]] == ["model_level", "table_level"]
 
-    def test_a_collision_created_by_lifting_is_warned_about(self):
-        # Two tables may each scope a metric named `total`; the model cannot.
+    def test_a_collision_created_by_lifting_is_renamed_and_warned_about(self):
+        # Two tables may each scope a metric named `total`; the model cannot, so
+        # the second one is renamed rather than silently dropped by the collision.
         model = _minimal_snowflake(
             tables=[
                 {
@@ -513,8 +541,44 @@ class TestLiftedMetrics:
                 for i in (1, 2)
             ]
         )
-        with pytest.warns(UserWarning, match="not unique once table-level metrics"):
-            convert_snowflake_to_ossie(yaml.dump(model))
+        with pytest.warns(UserWarning, match="renamed to 't2_total'"):
+            ossie = yaml.safe_load(convert_snowflake_to_ossie(yaml.dump(model)))
+        assert [m["name"] for m in ossie["metrics"]] == ["total", "t2_total"]
+
+    def test_a_collision_with_a_model_level_metric_is_renamed(self):
+        model = _minimal_snowflake(
+            metrics=[{"name": "total", "expr": "SUM(a)"}],
+            tables=[
+                {
+                    "name": "t",
+                    "base_table": _base_table(),
+                    "metrics": [{"name": "total", "expr": "SUM(amount)"}],
+                }
+            ],
+        )
+        with pytest.warns(UserWarning, match="renamed to 't_total'"):
+            ossie = yaml.safe_load(convert_snowflake_to_ossie(yaml.dump(model)))
+        assert [m["name"] for m in ossie["metrics"]] == ["total", "t_total"]
+
+    def test_a_rename_that_itself_collides_is_renamed_again(self):
+        # The table-prefixed name `t_total` is already taken here, so the first
+        # rename attempt must not be accepted as-is.
+        model = _minimal_snowflake(
+            metrics=[
+                {"name": "total", "expr": "SUM(a)"},
+                {"name": "t_total", "expr": "SUM(b)"},
+            ],
+            tables=[
+                {
+                    "name": "t",
+                    "base_table": _base_table(),
+                    "metrics": [{"name": "total", "expr": "SUM(amount)"}],
+                }
+            ],
+        )
+        with pytest.warns(UserWarning, match="renamed to 't_total_2'"):
+            ossie = yaml.safe_load(convert_snowflake_to_ossie(yaml.dump(model)))
+        assert [m["name"] for m in ossie["metrics"]] == ["total", "t_total", "t_total_2"]
 
     def test_lifting_qualifies_bare_columns_with_their_table(self):
         # Both tables have an `amount`, so `SUM(amount)` at the model level would
@@ -740,6 +804,65 @@ class TestPortableSql:
         # for it.
         assert is_portable_sql(expr) is True
 
+    def test_nulls_first_stays_portable(self):
+        # `NULLS FIRST` tokenizes asymmetrically from `NULLS LAST`: `FIRST` gets
+        # its own token kind where `LAST` does not.
+        assert is_portable_sql("ROW_NUMBER() OVER (ORDER BY t NULLS FIRST)") is True
+
+    @pytest.mark.parametrize(
+        "expr",
+        ["a -- trailing comment", "a /* block comment */", "'line1\\nline2'"],
+    )
+    def test_a_comment_or_escape_is_not_portable(self, expr):
+        # A `//`/`--` comment or a backslash escape is not standard outside
+        # Snowflake, even though the tokenizer accepts it.
+        assert is_portable_sql(expr) is False
+
+    @pytest.mark.parametrize(
+        "expr", ["CAST(x AS NUMERIC)", "CAST(x AS DECIMAL(10, 2))"]
+    )
+    def test_type_names_the_tokenizer_conflates_are_both_portable(self, expr):
+        # `NUMERIC` and `DECIMAL` tokenize identically; checking by token kind
+        # alone would silently approve or reject them together.
+        assert is_portable_sql(expr) is True
+
+    @pytest.mark.parametrize("name", ["comment", "role", "filter", "t.comment", "first"])
+    def test_a_keyword_shaped_column_name_is_portable(self, name):
+        assert is_portable_sql(name) is True
+
+    @pytest.mark.parametrize(
+        "expr", ["FILTER(x)", "ARRAY(1, 2)", "comment(x)", "FIRST(x)"]
+    )
+    def test_a_keyword_shaped_name_called_as_a_function_is_not_portable(self, expr):
+        assert is_portable_sql(expr) is False
+
+    def test_nulls_first_is_still_portable_once_first_is_called_elsewhere(self):
+        # `first` is blanket-allowed for this clause outside of a call, which
+        # must not reopen the gap `FIRST(x)` closes above.
+        assert is_portable_sql(
+            "ROW_NUMBER() OVER (ORDER BY t NULLS FIRST)"
+        ) is True
+
+    def test_position_with_in_is_portable(self):
+        assert is_portable_sql("POSITION('a' IN b)") is True
+
+    def test_position_with_a_comma_is_not_portable(self):
+        # The Snowflake-only two-argument form.
+        assert is_portable_sql("POSITION('a', b)") is False
+
+    def test_extract_of_a_standard_part_is_portable(self):
+        assert is_portable_sql("EXTRACT(DAY FROM x)") is True
+
+    def test_extract_of_a_snowflake_only_part_is_not_portable(self):
+        assert is_portable_sql("EXTRACT(DAYOFWEEK FROM x)") is False
+
+    def test_count_distinct_of_one_column_is_portable(self):
+        assert is_portable_sql("COUNT(DISTINCT a)") is True
+
+    def test_count_distinct_of_multiple_columns_is_not_portable(self):
+        # Snowflake-only multi-column DISTINCT.
+        assert is_portable_sql("COUNT(DISTINCT a, b)") is False
+
 
 # ---------------------------------------------------------------------------
 # lifted metric qualification
@@ -771,6 +894,30 @@ class TestQualifyColumns:
         assert _qualify_columns("SUM(orders.amount)", "orders", "m") == (
             "SUM(orders.amount)"
         )
+
+    def test_a_reserved_word_dataset_name_is_quoted(self):
+        # sqlglot's own tokenizer does not flag `order` as reserved on its own.
+        assert _qualify_columns("SUM(amount)", "order", "m") == (
+            'SUM("order".amount)'
+        )
+
+    def test_a_bare_reference_to_a_sibling_metric_is_left_unqualified(self):
+        assert _qualify_columns(
+            "revenue - cost", "orders", "margin",
+            sibling_renames={"revenue": "revenue", "cost": "cost"},
+        ) == "revenue - cost"
+
+    def test_a_bare_reference_to_a_renamed_sibling_metric_uses_the_new_name(self):
+        assert _qualify_columns(
+            "t_revenue - cost", "orders", "margin",
+            sibling_renames={"t_revenue": "t_revenue", "cost": "orders_cost"},
+        ) == "t_revenue - orders_cost"
+
+    def test_a_column_that_is_not_a_sibling_metric_is_still_qualified(self):
+        assert _qualify_columns(
+            "revenue - fee", "orders", "margin",
+            sibling_renames={"revenue": "revenue"},
+        ) == "revenue - orders.fee"
 
 
 # ---------------------------------------------------------------------------

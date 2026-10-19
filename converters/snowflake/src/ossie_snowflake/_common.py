@@ -206,6 +206,10 @@ _ANSI_FUNCTIONS = frozenset({
     "RTRIM", "SQRT", "SUBSTRING", "SUM", "TRIM", "UPPER",
 })
 
+# Date/time parts EXTRACT is portable for. Snowflake also accepts parts such as
+# `DAYOFWEEK` or `EPOCH_SECOND`, which are not standard SQL.
+_EXTRACT_PARTS = frozenset({"YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND"})
+
 # Operators, literals, identifiers and the reserved words that appear outside a
 # call (CASE ... END, IS NOT NULL, a window clause). Snowflake-only syntax lands
 # outside this set and is rejected by construction: `::` is DCOLON, a variant path
@@ -223,11 +227,26 @@ _PORTABLE_TOKENS = frozenset({
     TokenType.END, TokenType.DISTINCT, TokenType.OVER, TokenType.PARTITION_BY,
     TokenType.ORDER_BY, TokenType.ASC, TokenType.DESC, TokenType.ROW,
     TokenType.ROWS, TokenType.RANGE, TokenType.FROM, TokenType.FOR,
+    # A window function's null treatment: `NULLS LAST` already tokenizes as two
+    # VARs, so FIRST is added here to match, rather than only in `EXTRACT(... FROM
+    # FIRST)`; `_NON_PORTABLE_AFTER_CALL` below still rejects it after a call.
+    TokenType.FIRST,
 })
 
 # The kinds a function name can arrive as, so that `IN (` and `OVER (` are not
 # mistaken for calls.
 _NAME_TOKENS = frozenset({TokenType.VAR, TokenType.IDENTIFIER})
+
+# Keywords the tokenizer gives their own kind, but which are common, legitimate
+# column names (`comment`, `role`, a `filter` dimension). Portable only where a
+# bare name would be: standing alone, or next to a `.`, and never called -- called,
+# ARRAY(...) and OBJECT(...) are Snowflake constructors, FILTER(...) is an
+# aggregate clause, and the rest are not standard functions either.
+_KEYWORD_COLUMN_TOKENS = frozenset({
+    TokenType.COMMENT, TokenType.ROLE, TokenType.FORMAT, TokenType.INDEX,
+    TokenType.FILTER, TokenType.OFFSET, TokenType.LIMIT, TokenType.TOP,
+    TokenType.ARRAY, TokenType.OBJECT, TokenType.INTERVAL,
+})
 
 # Clauses that reach the tokenizer as ordinary names, so the per-token check waves
 # them through: a window function's null treatment and the timezone shift. Neither
@@ -247,12 +266,14 @@ _NON_PORTABLE_AFTER_CALL = (
     ("FROM", "LAST"),
 )
 
-# Type names, which reach the tokenizer as their own kinds inside CAST(x AS t).
-_PORTABLE_TYPE_TOKENS = frozenset({
-    TokenType.BIGINT, TokenType.BOOLEAN, TokenType.CHAR, TokenType.DATE,
-    TokenType.DATETIME, TokenType.DECIMAL, TokenType.DOUBLE, TokenType.FLOAT,
-    TokenType.INT, TokenType.SMALLINT, TokenType.TEXT, TokenType.TIME,
-    TokenType.TIMESTAMP, TokenType.VARCHAR,
+# Standard SQL type names, checked by text -- as `_NAME_TOKENS` is for functions --
+# rather than by the tokenizer's token kind, which groups some of these with
+# Snowflake-only spellings the tokenizer treats identically (e.g. `NUMERIC` and
+# `DECIMAL` both tokenize as `TokenType.DECIMAL`).
+_PORTABLE_TYPE_NAMES = frozenset({
+    "BIGINT", "BOOLEAN", "CHAR", "DATE", "DATETIME", "DECIMAL", "DOUBLE",
+    "FLOAT", "INT", "INTEGER", "NUMERIC", "REAL", "SMALLINT", "TEXT", "TIME",
+    "TIMESTAMP", "VARCHAR",
 })
 
 
@@ -264,13 +285,66 @@ def _starts_sequence(words, start, sequences):
     )
 
 
+def _paren_pairs(tokens):
+    """Maps each `L_PAREN` token index to the index of its matching `R_PAREN`."""
+    pairs = {}
+    stack = []
+    for index, token in enumerate(tokens):
+        if token.token_type is TokenType.L_PAREN:
+            stack.append(index)
+        elif token.token_type is TokenType.R_PAREN and stack:
+            pairs[stack.pop()] = index
+    return pairs
+
+
+def _depth0(tokens):
+    """Yields the tokens in `tokens` that are not inside a nested pair of parens."""
+    depth = 0
+    for token in tokens:
+        if token.token_type is TokenType.L_PAREN:
+            depth += 1
+        elif token.token_type is TokenType.R_PAREN:
+            depth -= 1
+        elif depth == 0:
+            yield token
+
+
+def _call_is_portable(name, args):
+    """Whether a call to the standard function `name` with token list `args` (the
+    tokens strictly between its parens) uses only the portable argument forms.
+
+    The allowlist above only names the function; some of them accept a
+    Snowflake-only argument form Postgres and the other spokes reject.
+    """
+    top_level = list(_depth0(args))
+    if name == "POSITION":
+        # Standard SQL is `POSITION(a IN b)`; Snowflake also accepts the comma
+        # form `POSITION(a, b)`.
+        return any(token.token_type is TokenType.IN for token in top_level)
+    if name == "EXTRACT":
+        # Standard SQL is `EXTRACT(part FROM x)`; Snowflake also accepts
+        # non-standard parts such as `DAYOFWEEK` or `EPOCH_SECOND`.
+        from_index = next(
+            (i for i, t in enumerate(top_level) if t.token_type is TokenType.FROM),
+            len(top_level),
+        )
+        part = " ".join(t.text.upper() for t in top_level[:from_index])
+        return part in _EXTRACT_PARTS
+    if name == "COUNT" and top_level and top_level[0].token_type is TokenType.DISTINCT:
+        # Standard SQL's `COUNT(DISTINCT x)` takes one column; Snowflake also
+        # accepts `COUNT(DISTINCT a, b)`.
+        return not any(t.token_type is TokenType.COMMA for t in top_level[1:])
+    return True
+
+
 def is_portable_sql(expr):
     """Whether `expr` uses only SQL that every Ossie spoke can be expected to read.
 
     A conservative check over Snowflake's own tokens, not a parse: an expression
     qualifies when every token is one of the kinds above and every call names a
-    standard function. Anything unrecognized -- a Snowflake builtin such as IFF or
-    ZEROIFNULL, a `::` cast, a variant path -- disqualifies it.
+    standard function with a portable argument form. Anything unrecognized -- a
+    Snowflake builtin such as IFF or ZEROIFNULL, a `::` cast, a variant path --
+    disqualifies it.
     """
     if not isinstance(expr, str) or not expr.strip():
         return False
@@ -288,12 +362,22 @@ def is_portable_sql(expr):
         if after_call and _starts_sequence(words, start, _NON_PORTABLE_AFTER_CALL):
             return False
 
+    paren_pairs = _paren_pairs(tokens)
+
     for index, token in enumerate(tokens):
+        # The tokenizer moves a `//` or `--` comment out of the text entirely, and
+        # un-escapes a backslash escape, so the check would otherwise approve text
+        # that is not valid outside Snowflake.
+        if token.comments:
+            return False
+        if token.token_type is TokenType.STRING and "\\" in expr[token.start:token.end + 1]:
+            return False
+
         called = (
             index + 1 < len(tokens)
             and tokens[index + 1].token_type is TokenType.L_PAREN
         )
-        if token.token_type in _PORTABLE_TYPE_TOKENS:
+        if words[index] in _PORTABLE_TYPE_NAMES:
             # A type word is portable as a cast target, `CAST(x AS DATE)`, or as
             # a column named `date`. Called, it is a Snowflake builtin instead --
             # `DATE(ts)`, `CHAR(65)` (which is CHR) -- except for the precision in
@@ -302,15 +386,60 @@ def is_portable_sql(expr):
             if called and not after_as and words[index] not in _ANSI_FUNCTIONS:
                 return False
             continue
+        if token.token_type is TokenType.FIRST and called:
+            # `FIRST` is blanket-allowed below for `NULLS FIRST` and `EXTRACT(...
+            # FROM first)`, where it is never called; `FIRST(x)` is not a standard
+            # function, and it is not in `_NAME_TOKENS` to fall through to the
+            # call check further down, so it needs its own rejection here.
+            return False
+        if token.token_type in _KEYWORD_COLUMN_TOKENS and not called:
+            previous = tokens[index - 1] if index > 0 else None
+            following = tokens[index + 1] if index + 1 < len(tokens) else None
+            is_whole = len(tokens) == 1
+            next_to_dot = (
+                (previous is not None and previous.token_type is TokenType.DOT)
+                or (following is not None and following.token_type is TokenType.DOT)
+            )
+            if is_whole or next_to_dot:
+                continue
+            return False
         if token.token_type not in _PORTABLE_TOKENS:
             return False
         if token.token_type not in _NAME_TOKENS:
             continue
         # A bare name is a column reference; a name followed by `(` is a call, and
-        # only the standard functions are portable.
-        if called and words[index] not in _ANSI_FUNCTIONS:
+        # only the standard functions, with a portable argument form, are portable.
+        if not called:
+            continue
+        if words[index] not in _ANSI_FUNCTIONS:
+            return False
+        close = paren_pairs.get(index + 1)
+        if close is not None and not _call_is_portable(words[index], tokens[index + 2:close]):
             return False
     return True
+
+
+# Reserved words ANSI SQL does not allow as a bare identifier. Checked by name
+# rather than by token kind when quoting a table name prefixed onto a lifted
+# metric's columns: sqlglot's own tokenizer is lenient about some of these
+# (`ORDER` and `GROUP` tokenize as ordinary names outside of `ORDER BY`/`GROUP
+# BY`), so it does not reliably flag them.
+_RESERVED_WORDS = frozenset({
+    "ALL", "AND", "ANY", "AS", "ASC", "BETWEEN", "BY", "CASE", "CAST", "CHECK",
+    "CREATE", "CURRENT", "DEFAULT", "DELETE", "DESC", "DISTINCT", "DROP",
+    "ELSE", "END", "EXISTS", "FALSE", "FETCH", "FIRST", "FOR", "FOREIGN",
+    "FROM", "GRANT", "GROUP", "HAVING", "IN", "INDEX", "INSERT", "INTERVAL",
+    "INTO", "IS", "JOIN", "KEY", "LAST", "LIKE", "LIMIT", "NOT", "NULL",
+    "OFFSET", "ON", "OR", "ORDER", "OVER", "PARTITION", "PRIMARY", "RANGE",
+    "REFERENCES", "REVOKE", "ROW", "ROWS", "SELECT", "SET", "SOME", "TABLE",
+    "THEN", "TIME", "TIMESTAMP", "TRUE", "UNION", "UNIQUE", "UNKNOWN",
+    "UPDATE", "USER", "VALUES", "VIEW", "WHEN", "WHERE", "WITH",
+})
+
+
+def is_reserved_word(name):
+    """Whether `name` is a standard SQL reserved word, unsafe as a bare identifier."""
+    return isinstance(name, str) and name.strip().upper() in _RESERVED_WORDS
 
 
 def require_list(value, context, error):

@@ -48,6 +48,7 @@ from ._common import (
     OSSIE_VERSION,
     TIME_DATATYPES,
     is_portable_sql,
+    is_reserved_word,
     parse_snowflake_datatype,
     require_list,
     require_mappings,
@@ -59,8 +60,9 @@ class SnowflakeConversionError(Exception):
     """Raised when a Snowflake YAML cannot be converted to Ossie format."""
 
 
-# Snowflake content with no Ossie home, carried through so it survives a round
-# trip. Kept deliberately short: see the module docstring.
+# Snowflake content with no Ossie home, carried through in `custom_extensions` so
+# it is kept in the Ossie document rather than dropped -- `ossie-to-snowflake`
+# does not read it back out yet. Kept deliberately short: see the module docstring.
 _MODEL_STASH_KEYS = ("verified_queries", "module_custom_instructions")
 _TABLE_STASH_KEYS = ("filters",)
 _FIELD_STASH_KEYS = ("sample_values", "cortex_search_service", "is_enum")
@@ -155,12 +157,21 @@ def _convert_model(snowflake):
             "one dataset"
         )
 
+    metrics = [
+        _convert_named_expr(m, "metric")
+        for m in _mappings(snowflake.get("metrics"), "'metrics'")
+    ]
+    # Seeds the collision check below: a table-level metric lifted to the model is
+    # renamed when its name is already taken, rather than merely warned about, so
+    # it still reaches the output.
+    used_metric_names = {m["name"] for m in metrics}
+
     datasets = []
     # Snowflake scopes metrics to a table as well as to the model; Ossie has only
     # model-level metrics, so a table's own metrics are lifted here.
     lifted_metrics = []
     for table in tables:
-        dataset, table_metrics = _convert_table(table)
+        dataset, table_metrics = _convert_table(table, used_metric_names)
         datasets.append(dataset)
         lifted_metrics.extend(table_metrics)
     result["datasets"] = datasets
@@ -169,12 +180,11 @@ def _convert_model(snowflake):
     if relationships:
         result["relationships"] = [_convert_relationship(r) for r in relationships]
 
-    metrics = [
-        _convert_named_expr(m, "metric")
-        for m in _mappings(snowflake.get("metrics"), "'metrics'")
-    ]
     metrics.extend(lifted_metrics)
     if metrics:
+        # A backstop, not the primary defense: per-table renaming above resolves
+        # the common case, but two model-level metrics sharing a name (a plain
+        # input error) are never renamed, since only lifting is.
         duplicates = sorted(_duplicate_names(metrics))
         if duplicates:
             warnings.warn(
@@ -191,12 +201,22 @@ def _convert_model(snowflake):
     return result
 
 
-def _convert_table(table):
+def _convert_table(table, used_metric_names=None):
     """Converts a Snowflake table dict to an Ossie dataset dict.
+
+    Args:
+        table: The Snowflake table dict.
+        used_metric_names: Metric names already claimed at the model level or by
+            an earlier table, mutated in place as this table's metrics claim
+            theirs. A name already in use is renamed, with the table name as a
+            prefix, rather than left to collide once lifted.
 
     Returns ``(dataset, table_metrics)``, where ``table_metrics`` are the table's
     own metrics for the caller to lift to the model level.
     """
+    if used_metric_names is None:
+        used_metric_names = set()
+
     name = table.get("name")
     if not name:
         raise SnowflakeConversionError("Missing required 'name' field in table")
@@ -218,7 +238,11 @@ def _convert_table(table):
         result["primary_key"] = list(columns)
 
     unique_keys = [
-        list(uk["columns"])
+        list(require_list(
+            uk.get("columns"),
+            f"Table '{name}': 'unique_keys.columns'",
+            SnowflakeConversionError,
+        ))
         for uk in _mappings(table.get("unique_keys"), f"Table '{name}': 'unique_keys'")
         if uk.get("columns")
     ]
@@ -250,9 +274,38 @@ def _convert_table(table):
     if unique_keys:
         result["unique_keys"] = unique_keys
 
+    metric_entries = _mappings(table.get("metrics"), f"Table '{name}': 'metrics'")
+
+    # Decided before qualification, because a sibling metric's own bare
+    # self-references (see `_qualify_columns`) need the final name, not whatever
+    # name the table happened to declare it under.
+    sibling_renames = {}
+    for entry in metric_entries:
+        metric_name = entry.get("name")
+        if not metric_name:
+            continue
+        if metric_name in used_metric_names:
+            final_name = f"{name}_{metric_name}"
+            suffix = 2
+            while final_name in used_metric_names:
+                # The table-prefixed name can itself already be taken -- by a
+                # model-level metric, or another table's own collision rename.
+                final_name = f"{name}_{metric_name}_{suffix}"
+                suffix += 1
+            warnings.warn(
+                f"[metric '{metric_name}' on table '{name}'] name collides with "
+                f"another metric once lifted to the model; renamed to '{final_name}'"
+            )
+        else:
+            final_name = metric_name
+        sibling_renames[metric_name] = final_name
+        used_metric_names.add(final_name)
+
     table_metrics = [
-        _convert_named_expr(entry, "metric", qualify_with=name)
-        for entry in _mappings(table.get("metrics"), f"Table '{name}': 'metrics'")
+        _convert_named_expr(
+            entry, "metric", qualify_with=name, sibling_renames=sibling_renames
+        )
+        for entry in metric_entries
     ]
 
     write_stash(result, _stash_data(table, _TABLE_STASH_KEYS))
@@ -286,7 +339,7 @@ def _convert_field(entry, is_time):
     return result
 
 
-def _convert_named_expr(entry, kind, qualify_with=None):
+def _convert_named_expr(entry, kind, qualify_with=None, sibling_renames=None):
     """Converts a Snowflake field or metric entry to an Ossie field or metric dict.
 
     Args:
@@ -294,17 +347,27 @@ def _convert_named_expr(entry, kind, qualify_with=None):
         kind: Human-readable type for error messages (e.g., "field", "metric").
         qualify_with: Dataset name to qualify bare column references with, set
             when a table-level metric is being lifted to the model level.
+        sibling_renames: Maps every metric name on the same table to the name it
+            is lifted under, identity for one that did not collide. Used both to
+            rename this entry if it is itself a renamed metric, and to leave a
+            bare reference to another metric on the table unqualified.
     """
     name = entry.get("name")
     if not name:
         raise SnowflakeConversionError(f"Missing required 'name' in {kind}")
+    name = sibling_renames.get(name, name) if sibling_renames else name
 
     expr = entry.get("expr")
-    if not expr:
+    if expr is None or (isinstance(expr, str) and not expr.strip()):
         raise SnowflakeConversionError(f"Missing required 'expr' in {kind} '{name}'")
+    if isinstance(expr, bool) or not isinstance(expr, (str, int, float)):
+        raise SnowflakeConversionError(
+            f"'expr' in {kind} '{name}' must be a string, got {type(expr).__name__}"
+        )
+    expr = str(expr)
 
     if qualify_with:
-        expr = _qualify_columns(expr, qualify_with, name)
+        expr = _qualify_columns(expr, qualify_with, name, sibling_renames=sibling_renames)
 
     # Ossie is a hub, and every exporter picks its own dialect, then ANSI_SQL,
     # then OSSIE_SQL_2026, dropping any field labelled with none of them. A
@@ -344,7 +407,8 @@ def _convert_named_expr(entry, kind, qualify_with=None):
     stash = _stash_data(entry, _FIELD_STASH_KEYS)
     if opaque_type:
         # The spec's guidance for `Opaque` is to record the concrete type that it
-        # stands in for, so the mapping stays reversible.
+        # stands in for. `ossie-to-snowflake` does not restore it yet, but keeping
+        # it here means a future export can without a format change.
         stash["data_type"] = opaque_type
     write_stash(result, stash)
 
@@ -447,7 +511,7 @@ def _parse_base_table(base_table, table_name):
     return ".".join(str(part).strip() for part in parts)
 
 
-def _qualify_columns(expr, dataset, metric_name):
+def _qualify_columns(expr, dataset, metric_name, sibling_renames=None):
     """Qualifies the bare column references in a lifted metric expression.
 
     A Snowflake table-level metric resolves against its own table, so ``SUM(amount)``
@@ -458,25 +522,40 @@ def _qualify_columns(expr, dataset, metric_name):
     (``core-spec/expression_language.md``), so lifting a metric carries its table
     into the expression.
 
-    The parse tree is only used to locate the columns; the prefixes are spliced
-    into the original text at the offsets it reports, so everything else -- casing,
-    spacing, comments, Snowflake-only functions -- survives verbatim.
+    A bare reference to another metric on the same table is different: once
+    lifted, that name is a model-level metric, not a dataset field, so it is left
+    unqualified -- with the sibling's own final name spliced in if lifting
+    renamed it, per ``sibling_renames``.
+
+    The parse tree is only used to locate the columns; the prefixes and renames
+    are spliced into the original text at the offsets it reports, so everything
+    else -- casing, spacing, comments, Snowflake-only functions -- survives
+    verbatim.
 
     Args:
         expr: The metric expression as written in the Snowflake YAML.
         dataset: The Ossie dataset name the metric is being lifted from.
         metric_name: The metric's name, used in the warning message.
+        sibling_renames: Maps every metric name on this table to the name it is
+            lifted under (identity for one that did not collide).
 
     Returns:
-        The expression with every bare column reference qualified, or the
-        expression unchanged (with a warning) when its columns cannot be located.
+        The expression with every bare column reference qualified and every bare
+        sibling-metric reference renamed, or the expression unchanged (with a
+        warning) when its columns cannot be located.
     """
     try:
         tree = parse_one(expr, read=DIALECT_SNOWFLAKE.lower())
     except (ParseError, TokenError, RecursionError):
         return _warn_unqualified(expr, metric_name, dataset)
 
-    offsets = set()
+    sibling_lookup = {
+        original.upper(): final for original, final in (sibling_renames or {}).items()
+    }
+
+    prefix_offsets = set()
+    # start -> (end, replacement) for a bare reference to a renamed sibling metric.
+    renames = {}
     for column in tree.find_all(exp.Column):
         if column.table:
             continue
@@ -484,18 +563,36 @@ def _qualify_columns(expr, dataset, metric_name):
         # splicing there qualifies `"Amount"` as `orders."Amount"` and leaves the
         # quoting intact.
         start = column.this.meta.get("start")
-        if start is None:
+        end = column.this.meta.get("end")
+        if start is None or end is None:
             return _warn_unqualified(expr, metric_name, dataset)
-        offsets.add(start)
+
+        final_name = sibling_lookup.get(column.this.this.upper())
+        if final_name is not None:
+            if final_name != column.this.this:
+                quoted = True if column.this.quoted else None
+                replacement = exp.to_identifier(final_name, quoted=quoted).sql(
+                    dialect=DIALECT_SNOWFLAKE.lower()
+                )
+                renames[start] = (end, replacement)
+            continue
+
+        prefix_offsets.add(start)
 
     # Quoted only when the dataset name cannot stand as a bare identifier, so a
     # name with a space or a leading digit survives and an ordinary name keeps the
-    # casing Snowflake would resolve it with.
-    prefix = exp.to_identifier(dataset).sql(dialect=DIALECT_SNOWFLAKE.lower())
+    # casing Snowflake would resolve it with; a reserved word such as `order` is
+    # quoted unconditionally, since sqlglot's own auto-quoting does not catch one.
+    quoted = True if is_reserved_word(dataset) else None
+    prefix = exp.to_identifier(dataset, quoted=quoted).sql(dialect=DIALECT_SNOWFLAKE.lower())
 
     # Right to left, so an earlier splice does not shift a later offset.
-    for start in sorted(offsets, reverse=True):
-        expr = f"{expr[:start]}{prefix}.{expr[start:]}"
+    for start in sorted(set(prefix_offsets) | set(renames), reverse=True):
+        if start in renames:
+            end, replacement = renames[start]
+            expr = f"{expr[:start]}{replacement}{expr[end + 1:]}"
+        else:
+            expr = f"{expr[:start]}{prefix}.{expr[start:]}"
     return expr
 
 
