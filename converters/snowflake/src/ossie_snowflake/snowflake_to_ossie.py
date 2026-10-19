@@ -60,6 +60,11 @@ class SnowflakeConversionError(Exception):
     """Raised when a Snowflake YAML cannot be converted to Ossie format."""
 
 
+def _is_blank(value):
+    """True for a name that is missing, empty, or whitespace-only."""
+    return not value or (isinstance(value, str) and not value.strip())
+
+
 # Snowflake content with no Ossie home, carried through in `custom_extensions` so
 # it is kept in the Ossie document rather than dropped -- `ossie-to-snowflake`
 # does not read it back out yet. Kept deliberately short: see the module docstring.
@@ -133,7 +138,7 @@ def _mappings(value, context):
 def _convert_model(snowflake):
     """Converts a Snowflake semantic model dict to an Ossie semantic model dict."""
     name = snowflake.get("name")
-    if not name:
+    if _is_blank(name):
         raise SnowflakeConversionError(
             "Missing required 'name' field in semantic model"
         )
@@ -218,7 +223,7 @@ def _convert_table(table, used_metric_names=None):
         used_metric_names = set()
 
     name = table.get("name")
-    if not name:
+    if _is_blank(name):
         raise SnowflakeConversionError("Missing required 'name' field in table")
 
     result = {"name": name, "source": _parse_base_table(table.get("base_table"), name)}
@@ -353,7 +358,7 @@ def _convert_named_expr(entry, kind, qualify_with=None, sibling_renames=None):
             bare reference to another metric on the table unqualified.
     """
     name = entry.get("name")
-    if not name:
+    if _is_blank(name):
         raise SnowflakeConversionError(f"Missing required 'name' in {kind}")
     name = sibling_renames.get(name, name) if sibling_renames else name
 
@@ -423,7 +428,7 @@ def _convert_named_expr(entry, kind, qualify_with=None, sibling_renames=None):
 def _convert_relationship(rel):
     """Converts a Snowflake relationship dict to an Ossie relationship dict."""
     name = rel.get("name")
-    if not name:
+    if _is_blank(name):
         raise SnowflakeConversionError(
             "Missing required 'name' field in relationship"
         )

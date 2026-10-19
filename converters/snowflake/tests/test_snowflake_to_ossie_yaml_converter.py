@@ -121,6 +121,11 @@ class TestConvertSnowflakeToOssie:
         with pytest.raises(SnowflakeConversionError, match="Missing required 'name'"):
             convert_snowflake_to_ossie(yaml.dump(model))
 
+    def test_a_whitespace_only_name_is_an_error(self):
+        model = _minimal_snowflake(name="   ")
+        with pytest.raises(SnowflakeConversionError, match="Missing required 'name'"):
+            convert_snowflake_to_ossie(yaml.dump(model))
+
     def test_a_model_without_tables_is_rejected(self):
         with pytest.raises(SnowflakeConversionError, match="no 'tables'"):
             convert_snowflake_to_ossie(yaml.dump({"name": "m", "tables": []}))
@@ -335,7 +340,9 @@ class TestConvertNamedExpr:
         with pytest.warns(UserWarning, match="will drop this field"):
             _convert_named_expr({"name": "f", "expr": "x::INT"}, "field")
 
-    @pytest.mark.parametrize("entry", [{}, {"name": ""}, {"expr": "X"}])
+    @pytest.mark.parametrize(
+        "entry", [{}, {"name": ""}, {"name": "   ", "expr": "X"}, {"expr": "X"}]
+    )
     def test_a_missing_name_is_an_error(self, entry):
         with pytest.raises(SnowflakeConversionError, match="Missing required 'name'"):
             _convert_named_expr(entry, "field")
@@ -423,6 +430,10 @@ class TestConvertTable:
     def test_name_is_required(self):
         with pytest.raises(SnowflakeConversionError, match="Missing required 'name'"):
             _convert_table({"base_table": _base_table()})
+
+    def test_a_whitespace_only_name_is_an_error(self):
+        with pytest.raises(SnowflakeConversionError, match="Missing required 'name'"):
+            _convert_table({"name": "   ", "base_table": _base_table()})
 
     def test_fields_keep_dimension_then_time_then_fact_order(self):
         dataset, _ = _silently(
@@ -745,6 +756,10 @@ class TestConvertRelationship:
         del rel[key]
         with pytest.raises(SnowflakeConversionError):
             _convert_relationship(rel)
+
+    def test_a_whitespace_only_name_is_an_error(self):
+        with pytest.raises(SnowflakeConversionError, match="Missing required 'name'"):
+            _convert_relationship(self._rel(name="   "))
 
     @pytest.mark.parametrize(
         "columns",
