@@ -504,6 +504,22 @@ class TestConvertTable:
                 }
             )
 
+    def test_two_metrics_on_the_same_table_sharing_a_name_are_rejected(self):
+        # The sibling_renames dict below is keyed by original name, so it cannot
+        # represent two distinct entries that declare the same name -- the second
+        # would silently overwrite the first's rename instead of being resolved.
+        with pytest.raises(SnowflakeConversionError, match="duplicate metric name"):
+            _convert_table(
+                {
+                    "name": "t",
+                    "base_table": _base_table(),
+                    "metrics": [
+                        {"name": "total", "expr": "SUM(amount)"},
+                        {"name": "total", "expr": "SUM(other_amount)"},
+                    ],
+                }
+            )
+
 
 # ---------------------------------------------------------------------------
 # metrics lifted from tables

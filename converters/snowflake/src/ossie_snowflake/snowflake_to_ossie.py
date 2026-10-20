@@ -281,6 +281,15 @@ def _convert_table(table, used_metric_names=None):
 
     metric_entries = _mappings(table.get("metrics"), f"Table '{name}': 'metrics'")
 
+    duplicate_metric_names = _duplicate_names(
+        [entry for entry in metric_entries if not _is_blank(entry.get("name"))]
+    )
+    if duplicate_metric_names:
+        raise SnowflakeConversionError(
+            f"Table '{name}': duplicate metric name(s): "
+            f"{', '.join(sorted(duplicate_metric_names))}"
+        )
+
     # Decided before qualification, because a sibling metric's own bare
     # self-references (see `_qualify_columns`) need the final name, not whatever
     # name the table happened to declare it under.
