@@ -360,8 +360,8 @@ def _convert_relationship(rel):
     result["left_table"] = left_table
     result["right_table"] = right_table
 
-    from_cols = rel.get("from_columns", [])
-    to_cols = rel.get("to_columns", [])
+    from_cols = _list(rel.get("from_columns"), f"Relationship '{rel_name}': 'from_columns'")
+    to_cols = _list(rel.get("to_columns"), f"Relationship '{rel_name}': 'to_columns'")
 
     if len(from_cols) != len(to_cols):
         raise OssieConversionError(

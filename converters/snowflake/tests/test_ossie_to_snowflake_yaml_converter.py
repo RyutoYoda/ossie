@@ -570,6 +570,35 @@ class TestConvertRelationship:
         result = _convert_relationship(rel)
         assert "relationship_columns" not in result
 
+    def test_null_columns_are_treated_as_missing(self):
+        rel = {"name": "r", "from": "a", "to": "b", "from_columns": None, "to_columns": None}
+        result = _convert_relationship(rel)
+        assert "relationship_columns" not in result
+
+    def test_a_from_columns_that_is_not_a_list_is_rejected(self):
+        # A bare string is iterable, so without this check it would otherwise be
+        # zipped character by character instead of raising.
+        rel = {
+            "name": "r",
+            "from": "a",
+            "to": "b",
+            "from_columns": "a_id",
+            "to_columns": ["b_id"],
+        }
+        with pytest.raises(OssieConversionError, match="'from_columns' must be a list"):
+            _convert_relationship(rel)
+
+    def test_a_to_columns_that_is_not_a_list_is_rejected(self):
+        rel = {
+            "name": "r",
+            "from": "a",
+            "to": "b",
+            "from_columns": ["a_id"],
+            "to_columns": "b_id",
+        }
+        with pytest.raises(OssieConversionError, match="'to_columns' must be a list"):
+            _convert_relationship(rel)
+
 
 # ---------------------------------------------------------------------------
 # _convert_dataset
